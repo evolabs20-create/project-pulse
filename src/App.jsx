@@ -1,246 +1,642 @@
-import { useState, useEffect } from "react";
-import { projects, initialTasks, memoryHighlights, models, sessions, agents, skills, costEstimates } from "./data";
+import { useEffect, useMemo, useState } from "react";
+import { agents, costEstimates, initialTasks, memoryHighlights, models, projects, sessions, skills } from "./data";
+
+const STORAGE_KEY = "pulse-tasks";
 
 const STATUS_STYLES = {
-  active:  { bg: "bg-green-500/15", border: "border-green-500/40", text: "text-green-400", label: "ACTIVE",  dot: "bg-green-400" },
-  stalled: { bg: "bg-amber-500/15", border: "border-amber-500/40", text: "text-amber-400", label: "STALLED", dot: "bg-amber-400" },
-  done:    { bg: "bg-blue-500/15",  border: "border-blue-500/40",  text: "text-blue-400",  label: "DONE",    dot: "bg-blue-400" },
-  blocked: { bg: "bg-red-500/15",   border: "border-red-500/40",   text: "text-red-400",   label: "BLOCKED", dot: "bg-red-400" },
+  active: {
+    bg: "bg-emerald-400/10",
+    border: "border-emerald-400/25",
+    text: "text-emerald-200",
+    pill: "text-emerald-300 bg-emerald-400/10 border-emerald-400/25",
+    label: "Active",
+    accent: "bg-emerald-400",
+  },
+  stalled: {
+    bg: "bg-amber-400/10",
+    border: "border-amber-400/25",
+    text: "text-amber-100",
+    pill: "text-amber-200 bg-amber-400/10 border-amber-400/25",
+    label: "Stalled",
+    accent: "bg-amber-400",
+  },
+  done: {
+    bg: "bg-sky-400/10",
+    border: "border-sky-400/25",
+    text: "text-sky-100",
+    pill: "text-sky-200 bg-sky-400/10 border-sky-400/25",
+    label: "Done",
+    accent: "bg-sky-400",
+  },
+  blocked: {
+    bg: "bg-rose-400/10",
+    border: "border-rose-400/25",
+    text: "text-rose-100",
+    pill: "text-rose-200 bg-rose-400/10 border-rose-400/25",
+    label: "Blocked",
+    accent: "bg-rose-400",
+  },
 };
-const PRI = { high: "text-red-400", "medium-high": "text-orange-400", medium: "text-amber-400", "medium-low": "text-yellow-300", low: "text-green-400" };
 
-function Badge({ status }) {
-  const s = STATUS_STYLES[status] || STATUS_STYLES.stalled;
-  return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${s.bg} ${s.border} border ${s.text}`}><span className={`w-2 h-2 rounded-full ${s.dot}`}/>{s.label}</span>;
+const PRIORITY_STYLES = {
+  high: "text-rose-300 bg-rose-400/10 border-rose-400/25",
+  "medium-high": "text-orange-200 bg-orange-400/10 border-orange-400/25",
+  medium: "text-amber-100 bg-amber-400/10 border-amber-400/25",
+  "medium-low": "text-lime-100 bg-lime-400/10 border-lime-400/25",
+  low: "text-emerald-100 bg-emerald-400/10 border-emerald-400/25",
+};
+
+const PRIORITY_ORDER = {
+  high: 0,
+  "medium-high": 1,
+  medium: 2,
+  "medium-low": 3,
+  low: 4,
+};
+
+const STATUS_ORDER = { blocked: 0, stalled: 1, active: 2, done: 3 };
+
+const PROJECT_ALIASES = {
+  "pintrader platform (mypinfo)": "pintrader platform",
+  "pintrader platform": "pintrader platform",
+  crazy4pins: "crazy4pins",
+  "webuydisneypins.com": "webuydisneypins.com",
+  mykitchen: "mykitchen",
+  "pin price scanner": "pin price scanner",
+  "arteaga designs": "arteaga designs",
+  "arteaga party favors": "arteaga party favors",
+  "evo dashboard": "evo dashboard",
+  "openclaw/evo": "evo / openclaw",
+  "evo / openclaw": "evo / openclaw",
+};
+
+function normalizeProjectName(name) {
+  return PROJECT_ALIASES[name.toLowerCase()] ?? name.toLowerCase();
 }
 
 function Tab({ active, onClick, children }) {
-  return <button onClick={onClick} className={`px-4 py-2 text-sm font-medium rounded-lg transition-colors ${active ? "bg-white/10 text-white" : "text-gray-500 hover:text-gray-300"}`}>{children}</button>;
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-full px-4 py-2 text-sm transition ${
+        active
+          ? "bg-white text-slate-950 shadow-lg shadow-cyan-500/10"
+          : "text-slate-400 hover:bg-white/5 hover:text-white"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StatusBadge({ status }) {
+  const style = STATUS_STYLES[status] ?? STATUS_STYLES.stalled;
+  return (
+    <span className={`inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-semibold ${style.pill}`}>
+      <span className={`h-2 w-2 rounded-full ${style.accent}`} />
+      {style.label}
+    </span>
+  );
+}
+
+function PriorityBadge({ priority }) {
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${PRIORITY_STYLES[priority]}`}>
+      {priority.replace("-", " ")}
+    </span>
+  );
+}
+
+function SectionCard({ className = "", children }) {
+  return (
+    <section
+      className={`rounded-3xl border border-white/10 bg-slate-950/65 p-5 shadow-[0_20px_80px_rgba(2,8,23,0.45)] backdrop-blur ${className}`}
+    >
+      {children}
+    </section>
+  );
+}
+
+function MetricCard({ label, value, hint, tone = "text-white" }) {
+  return (
+    <div className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">{label}</div>
+      <div className={`mt-2 text-3xl font-semibold ${tone}`}>{value}</div>
+      <div className="mt-1 text-sm text-slate-400">{hint}</div>
+    </div>
+  );
 }
 
 export default function App() {
-  const [tasks, setTasks] = useState(() => { try { return JSON.parse(localStorage.getItem("pulse-tasks")) || initialTasks; } catch { return initialTasks; } });
+  const [tasks, setTasks] = useState(() => {
+    try {
+      return JSON.parse(localStorage.getItem(STORAGE_KEY)) || initialTasks;
+    } catch {
+      return initialTasks;
+    }
+  });
   const [filter, setFilter] = useState("all");
   const [tab, setTab] = useState("projects");
 
-  useEffect(() => { localStorage.setItem("pulse-tasks", JSON.stringify(tasks)); }, [tasks]);
-  const toggle = (id) => setTasks(p => p.map(t => t.id === id ? { ...t, done: !t.done } : t));
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks));
+  }, [tasks]);
 
-  const groups = {}; tasks.forEach(t => { if (!groups[t.project]) groups[t.project] = []; groups[t.project].push(t); });
-  const total = tasks.length, done = tasks.filter(t => t.done).length;
-  const filtered = filter === "all" ? tasks : filter === "open" ? tasks.filter(t => !t.done) : tasks.filter(t => t.done);
+  const toggleTask = (id) => {
+    setTasks((current) => current.map((task) => (task.id === id ? { ...task, done: !task.done } : task)));
+  };
+
+  const {
+    doneTasks,
+    completion,
+    projectSummaries,
+    attentionTasks,
+    totalProjects,
+  } = useMemo(() => {
+    const totalTasks = tasks.length;
+    const completed = tasks.filter((task) => task.done).length;
+    const grouped = tasks.reduce((acc, task) => {
+      const key = normalizeProjectName(task.project);
+      if (!acc[key]) {
+        acc[key] = [];
+      }
+      acc[key].push(task);
+      return acc;
+    }, {});
+
+    const summaries = projects
+      .map((project) => {
+        const key = normalizeProjectName(project.name);
+        const projectTasks = grouped[key] ?? [];
+        const openTasks = projectTasks.filter((task) => !task.done);
+        const completedTasks = projectTasks.length - openTasks.length;
+        const progress = projectTasks.length ? Math.round((completedTasks / projectTasks.length) * 100) : project.status === "done" ? 100 : 0;
+        return {
+          ...project,
+          key,
+          totalTasks: projectTasks.length,
+          openTasks,
+          completedTasks,
+          progress,
+          nextTask: openTasks[0]?.text ?? null,
+        };
+      })
+      .sort((a, b) => {
+        if (STATUS_ORDER[a.status] !== STATUS_ORDER[b.status]) {
+          return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+        }
+        if (PRIORITY_ORDER[a.priority] !== PRIORITY_ORDER[b.priority]) {
+          return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+        }
+        return b.openTasks.length - a.openTasks.length;
+      });
+
+    const rankedTasks = summaries
+      .flatMap((project) =>
+        project.openTasks.map((task) => ({
+          ...task,
+          projectName: project.name,
+          projectStatus: project.status,
+          priority: project.priority,
+        })),
+      )
+      .sort((a, b) => {
+        if (STATUS_ORDER[a.projectStatus] !== STATUS_ORDER[b.projectStatus]) {
+          return STATUS_ORDER[a.projectStatus] - STATUS_ORDER[b.projectStatus];
+        }
+        return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+      })
+      .slice(0, 6);
+
+    return {
+      doneTasks: completed,
+      completion: totalTasks ? Math.round((completed / totalTasks) * 100) : 0,
+      projectSummaries: summaries,
+      attentionTasks: rankedTasks,
+      totalProjects: projects.length,
+    };
+  }, [tasks]);
+
+  const filteredGroups = useMemo(() => {
+    const visibleTasks = tasks.filter((task) => {
+      if (filter === "open") return !task.done;
+      if (filter === "done") return task.done;
+      return true;
+    });
+
+    const grouped = visibleTasks.reduce((acc, task) => {
+      const key = normalizeProjectName(task.project);
+      if (!acc[key]) {
+        const summary = projectSummaries.find((project) => project.key === key);
+        acc[key] = {
+          label: summary?.name ?? task.project,
+          priority: summary?.priority ?? "medium",
+          status: summary?.status ?? "stalled",
+          tasks: [],
+        };
+      }
+      acc[key].tasks.push(task);
+      return acc;
+    }, {});
+
+    return Object.values(grouped).sort((a, b) => {
+      if (STATUS_ORDER[a.status] !== STATUS_ORDER[b.status]) {
+        return STATUS_ORDER[a.status] - STATUS_ORDER[b.status];
+      }
+      return PRIORITY_ORDER[a.priority] - PRIORITY_ORDER[b.priority];
+    });
+  }, [filter, projectSummaries, tasks]);
+
+  const activeProjects = projectSummaries.filter((project) => project.status === "active").length;
+  const stalledProjects = projectSummaries.filter((project) => project.status === "stalled" || project.status === "blocked").length;
+  const blockedProjects = projectSummaries.filter((project) => project.status === "blocked").length;
+  const openTasks = tasks.length - doneTasks;
 
   return (
-    <div className="min-h-screen bg-[#0a0a14] text-gray-100">
-      {/* Header */}
-      <header className="border-b border-gray-800/50 px-6 py-4">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-black"><span className="text-red-500">🔴</span> Project Pulse</h1>
-            <p className="text-xs text-gray-500 mt-1">Synced: {new Date().toLocaleString()} · Say "Sync" to Evo to refresh</p>
-          </div>
-          <div className="text-right hidden sm:block">
-            <div className="text-xs text-gray-500">Est. today</div>
-            <div className="text-lg font-bold text-green-400">{costEstimates.today.estimatedCost}</div>
-            <div className="text-xs text-gray-500">{costEstimates.today.estimatedTokens} tokens · {costEstimates.today.sessions} sessions</div>
-          </div>
-        </div>
-      </header>
-
-      <div className="max-w-7xl mx-auto px-6 py-6">
-        {/* Stats */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-          {[
-            { l: "Active", v: projects.filter(p => p.status==="active").length, c: "text-green-400" },
-            { l: "Stalled", v: projects.filter(p => p.status==="stalled"||p.status==="blocked").length, c: "text-amber-400" },
-            { l: "Tasks Done", v: `${done}/${total}`, c: "text-blue-400" },
-            { l: "Completion", v: `${total?Math.round(done/total*100):0}%`, c: "text-purple-400" },
-            { l: "Models", v: models.length, c: "text-cyan-400" },
-          ].map(s => (
-            <div key={s.l} className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-3">
-              <div className="text-[10px] text-gray-500 uppercase font-semibold">{s.l}</div>
-              <div className={`text-2xl font-black ${s.c} mt-0.5`}>{s.v}</div>
+    <div className="min-h-screen text-slate-100">
+      <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+        <header className="mb-6 overflow-hidden rounded-[2rem] border border-cyan-400/15 bg-[linear-gradient(135deg,rgba(8,47,73,0.92),rgba(15,23,42,0.92),rgba(28,25,23,0.82))] p-6 shadow-[0_25px_100px_rgba(8,145,178,0.15)]">
+          <div className="grid gap-6 lg:grid-cols-[1.45fr_0.85fr]">
+            <div>
+              <div className="mb-4 inline-flex rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-cyan-200">
+                Project Pulse Dashboard
+              </div>
+              <h1 className="max-w-2xl text-3xl font-semibold tracking-tight text-white sm:text-4xl">
+                Cleaner triage for project health, open work, and operating context.
+              </h1>
+              <p className="mt-3 max-w-2xl text-sm leading-6 text-slate-300 sm:text-base">
+                This snapshot is based on the in-repo project, task, agent, model, and memory data. Task checkoffs persist in the browser; project statuses and notes remain data-driven.
+              </p>
             </div>
-          ))}
-        </div>
-
-        {/* Tabs */}
-        <div className="flex gap-1 mb-6 bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-1 overflow-x-auto">
-          {[["projects","📊 Projects"],["tasks","✅ Tasks"],["models","🤖 Models & Cost"],["agents","🧩 Agents & Skills"],["memory","🧠 Memory"]].map(([k,l]) => (
-            <Tab key={k} active={tab===k} onClick={()=>setTab(k)}>{l}</Tab>
-          ))}
-        </div>
-
-        {/* PROJECTS TAB */}
-        {tab === "projects" && (
-          <>
-            <div className="bg-red-500/5 border border-red-500/20 rounded-xl p-4 mb-6">
-              <h2 className="text-sm font-bold text-red-400 mb-1">⏰ Upcoming Deadlines</h2>
-              <p className="text-xs text-gray-500">No hard deadlines next 7 days. Priorities: CRAZY4PINS mobile, OpenClaw stability.</p>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-              {projects.map(p => (
-                <div key={p.id} className={`${STATUS_STYLES[p.status]?.bg} ${STATUS_STYLES[p.status]?.border} border rounded-xl p-4 hover:scale-[1.02] transition-transform`}>
-                  <div className="flex justify-between items-start mb-2">
-                    <h3 className="font-bold text-white text-sm">{p.name}</h3>
-                    <Badge status={p.status} />
-                  </div>
-                  <p className="text-xs text-gray-400 mb-2">{p.notes}</p>
-                  <span className={`text-xs font-semibold ${PRI[p.priority]}`}>● {p.priority.toUpperCase()}</span>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Current focus</div>
+                <div className="mt-2 text-lg font-semibold text-white">
+                  {attentionTasks[0]?.projectName ?? "No active queue"}
                 </div>
-              ))}
+                <div className="mt-1 text-sm text-slate-300">
+                  {attentionTasks[0]?.text ?? "No open tasks captured in the repo data."}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-slate-950/45 p-4">
+                <div className="text-[11px] uppercase tracking-[0.18em] text-slate-400">Cost snapshot</div>
+                <div className="mt-2 text-2xl font-semibold text-emerald-300">{costEstimates.today.estimatedCost}</div>
+                <div className="mt-1 text-sm text-slate-300">
+                  {costEstimates.today.estimatedTokens} across {costEstimates.today.sessions} sessions
+                </div>
+                <div className="mt-2 text-xs text-slate-400">{costEstimates.today.note}</div>
+              </div>
             </div>
-          </>
-        )}
+          </div>
+        </header>
 
-        {/* TASKS TAB */}
-        {tab === "tasks" && (
-          <>
-            <div className="flex items-center gap-2 mb-4">
-              {["all","open","done"].map(f => (
-                <button key={f} onClick={()=>setFilter(f)} className={`px-3 py-1.5 rounded-full text-xs border transition ${filter===f?"bg-white/10 border-white/20 text-white":"border-gray-800 text-gray-500"}`}>
-                  {f==="all"?`All (${total})`:f==="open"?`Open (${total-done})`:`Done (${done})`}
-                </button>
-              ))}
-            </div>
-            <div className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl divide-y divide-gray-800/30">
-              {Object.entries(groups).map(([g, gt]) => {
-                const vis = gt.filter(t => filtered.includes(t));
-                if (!vis.length) return null;
-                return (
-                  <div key={g} className="p-4">
-                    <h3 className="text-xs font-bold text-gray-500 uppercase mb-2">{g}</h3>
-                    {vis.map(t => (
-                      <label key={t.id} className={`flex items-start gap-3 p-2.5 rounded-lg cursor-pointer hover:bg-white/5 ${t.done?"opacity-40":""}`}>
-                        <input type="checkbox" checked={t.done} onChange={()=>toggle(t.id)} className="mt-0.5 w-4 h-4 accent-green-500 cursor-pointer" />
-                        <span className={`text-sm ${t.done?"line-through text-gray-500":"text-gray-200"}`}>{t.text}</span>
-                      </label>
-                    ))}
+        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
+          <MetricCard label="Projects" value={totalProjects} hint={`${activeProjects} active, ${stalledProjects} at risk`} />
+          <MetricCard label="Open Tasks" value={openTasks} hint={`${doneTasks} completed locally`} tone="text-cyan-200" />
+          <MetricCard label="Completion" value={`${completion}%`} hint="Based on tracked task checklist" tone="text-sky-200" />
+          <MetricCard label="Blocked" value={blockedProjects} hint="Projects with stated blockers" tone="text-rose-200" />
+          <MetricCard label="Models" value={models.length} hint={`${sessions.length} active sessions in snapshot`} tone="text-emerald-200" />
+        </div>
+
+        <nav className="mb-6 flex gap-2 overflow-x-auto rounded-full border border-white/10 bg-slate-950/60 p-2 backdrop-blur">
+          {[
+            ["projects", "Projects"],
+            ["tasks", "Tasks"],
+            ["models", "Models & Cost"],
+            ["agents", "Agents & Skills"],
+            ["memory", "Memory"],
+          ].map(([key, label]) => (
+            <Tab key={key} active={tab === key} onClick={() => setTab(key)}>
+              {label}
+            </Tab>
+          ))}
+        </nav>
+
+        {tab === "projects" && (
+          <div className="space-y-6">
+            <div className="grid gap-6 xl:grid-cols-[1.5fr_0.9fr]">
+              <SectionCard>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-semibold text-white">Priority queue</h2>
+                    <p className="mt-1 text-sm text-slate-400">
+                      Ranked from blocked and stalled work first, then active projects by priority.
+                    </p>
                   </div>
+                  <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-slate-300">
+                    {attentionTasks.length} next actions
+                  </div>
+                </div>
+                <div className="mt-5 space-y-3">
+                  {attentionTasks.map((task) => (
+                    <div key={task.id} className="flex items-start justify-between gap-4 rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <StatusBadge status={task.projectStatus} />
+                          <PriorityBadge priority={task.priority} />
+                          <span className="text-sm font-medium text-white">{task.projectName}</span>
+                        </div>
+                        <p className="mt-2 text-sm text-slate-300">{task.text}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+
+              <SectionCard>
+                <h2 className="text-xl font-semibold text-white">Operational notes</h2>
+                <div className="mt-4 space-y-3 text-sm text-slate-300">
+                  <div className="rounded-2xl border border-amber-400/15 bg-amber-400/8 p-4">
+                    <div className="font-medium text-amber-100">No deadline data is stored in the repo.</div>
+                    <div className="mt-1 text-amber-50/80">
+                      The dashboard now shows risk and open-work signals instead of implying a live deadline feed.
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-cyan-400/15 bg-cyan-400/8 p-4">
+                    <div className="font-medium text-cyan-100">Task/project naming is normalized in the UI.</div>
+                    <div className="mt-1 text-cyan-50/80">
+                      This reconciles names like “OpenClaw/Evo” and “Evo / OpenClaw” without rewriting source data.
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-emerald-400/15 bg-emerald-400/8 p-4">
+                    <div className="font-medium text-emerald-100">GitHub Pages compatibility is preserved.</div>
+                    <div className="mt-1 text-emerald-50/80">
+                      The Vite base path remains unchanged and the dashboard still builds as a static site.
+                    </div>
+                  </div>
+                </div>
+              </SectionCard>
+            </div>
+
+            <div className="grid gap-4 lg:grid-cols-2 2xl:grid-cols-3">
+              {projectSummaries.map((project) => {
+                const style = STATUS_STYLES[project.status] ?? STATUS_STYLES.stalled;
+                return (
+                  <SectionCard key={project.id} className={`border ${style.border} ${style.bg}`}>
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-lg font-semibold text-white">{project.name}</h3>
+                          <StatusBadge status={project.status} />
+                        </div>
+                        <p className="mt-2 text-sm leading-6 text-slate-300">{project.notes}</p>
+                      </div>
+                      <PriorityBadge priority={project.priority} />
+                    </div>
+
+                    <div className="mt-5 grid grid-cols-3 gap-3">
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/35 p-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Open</div>
+                        <div className="mt-1 text-2xl font-semibold text-white">{project.openTasks.length}</div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/35 p-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Done</div>
+                        <div className="mt-1 text-2xl font-semibold text-white">{project.completedTasks}</div>
+                      </div>
+                      <div className="rounded-2xl border border-white/10 bg-slate-950/35 p-3">
+                        <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Progress</div>
+                        <div className="mt-1 text-2xl font-semibold text-white">{project.progress}%</div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <div className="mb-2 flex items-center justify-between text-xs text-slate-400">
+                        <span>Task completion</span>
+                        <span>
+                          {project.completedTasks}/{project.totalTasks || 0}
+                        </span>
+                      </div>
+                      <div className="h-2 rounded-full bg-white/10">
+                        <div
+                          className={`h-2 rounded-full ${style.accent}`}
+                          style={{ width: `${project.progress}%` }}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4">
+                      <div className="text-[11px] uppercase tracking-[0.18em] text-slate-500">Next task</div>
+                      <div className="mt-2 text-sm text-slate-200">
+                        {project.nextTask ?? "No tracked tasks for this project in the repo snapshot."}
+                      </div>
+                    </div>
+                  </SectionCard>
                 );
               })}
             </div>
-          </>
-        )}
-
-        {/* MODELS & COST TAB */}
-        {tab === "models" && (
-          <div className="space-y-6">
-            <div className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-5">
-              <h2 className="text-lg font-bold text-cyan-400 mb-4">🤖 Active Models</h2>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead><tr className="text-left text-xs text-gray-500 uppercase">
-                    <th className="pb-3 pr-4">Provider</th><th className="pb-3 pr-4">Model</th><th className="pb-3 pr-4">Context</th><th className="pb-3 pr-4">Input Cost</th><th className="pb-3 pr-4">Output Cost</th><th className="pb-3">Status</th>
-                  </tr></thead>
-                  <tbody>{models.map(m => (
-                    <tr key={m.model} className="border-t border-gray-800/30">
-                      <td className="py-3 pr-4 text-gray-300 font-medium">{m.provider}</td>
-                      <td className="py-3 pr-4"><code className="text-purple-400 text-xs bg-purple-500/10 px-2 py-0.5 rounded">{m.model}</code></td>
-                      <td className="py-3 pr-4 text-gray-400">{m.ctx}</td>
-                      <td className="py-3 pr-4 text-green-400 font-mono text-xs">{m.costIn}</td>
-                      <td className="py-3 pr-4 text-red-400 font-mono text-xs">{m.costOut}</td>
-                      <td className="py-3"><span className={`text-xs ${m.status==="ok"?"text-green-400":"text-amber-400"}`}>{m.status==="ok"?"✅":"⚠️"} {m.label}</span></td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            </div>
-
-            <div className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-5">
-              <h2 className="text-lg font-bold text-green-400 mb-4">💰 Cost Breakdown</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-                <div className="bg-green-500/5 border border-green-500/20 rounded-lg p-4">
-                  <div className="text-xs text-gray-500 uppercase">Estimated Today</div>
-                  <div className="text-2xl font-black text-green-400 mt-1">{costEstimates.today.estimatedCost}</div>
-                  <div className="text-xs text-gray-500 mt-1">{costEstimates.today.estimatedTokens} tokens across {costEstimates.today.sessions} sessions</div>
-                </div>
-                <div className="bg-blue-500/5 border border-blue-500/20 rounded-lg p-4">
-                  <div className="text-xs text-gray-500 uppercase">Note</div>
-                  <div className="text-sm text-gray-300 mt-2">{costEstimates.today.note}</div>
-                </div>
-              </div>
-              <h3 className="text-sm font-bold text-gray-400 mb-2">Rate Card</h3>
-              <div className="space-y-2">
-                {costEstimates.rates.map(r => (
-                  <div key={r.model} className="flex items-center justify-between py-2 px-3 bg-white/[0.02] rounded-lg">
-                    <span className="text-sm text-gray-300">{r.model}</span>
-                    <div className="flex gap-4 text-xs">
-                      <span className="text-green-400">In: {r.input}</span>
-                      <span className="text-red-400">Out: {r.output}</span>
-                      <span className="text-gray-500 font-bold w-10 text-right">{r.tier}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-5">
-              <h2 className="text-lg font-bold text-amber-400 mb-4">📡 Active Sessions</h2>
-              <div className="space-y-2">
-                {sessions.map(s => (
-                  <div key={s.key} className="flex items-center justify-between py-2 px-3 bg-white/[0.02] rounded-lg">
-                    <div>
-                      <span className="text-sm text-white font-medium">{s.key}</span>
-                      <span className="text-xs text-gray-500 ml-2">{s.kind}</span>
-                    </div>
-                    <code className="text-xs text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">{s.model}</code>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         )}
 
-        {/* AGENTS & SKILLS TAB */}
-        {tab === "agents" && (
-          <div className="space-y-6">
-            <div className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-5">
-              <h2 className="text-lg font-bold text-orange-400 mb-4">🧩 Agents</h2>
-              {agents.map(a => (
-                <div key={a.name} className="flex items-center justify-between py-3 px-4 mb-2 bg-white/[0.02] rounded-lg border border-gray-800/30">
-                  <div>
-                    <span className="text-white font-bold">{a.name}</span>
-                    <span className={`ml-2 text-xs px-2 py-0.5 rounded-full ${a.status==="active"?"bg-green-500/15 text-green-400 border border-green-500/30":"bg-amber-500/15 text-amber-400 border border-amber-500/30"}`}>{a.status}</span>
-                    <div className="text-xs text-gray-500 mt-1">{a.desc}</div>
+        {tab === "tasks" && (
+          <div className="space-y-5">
+            <SectionCard className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+              <div>
+                <h2 className="text-xl font-semibold text-white">Task tracker</h2>
+                <p className="mt-1 text-sm text-slate-400">
+                  Checklist state is local to this browser; task text stays sourced from the repo.
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {["all", "open", "done"].map((value) => (
+                  <button
+                    key={value}
+                    onClick={() => setFilter(value)}
+                    className={`rounded-full border px-3 py-1.5 text-sm transition ${
+                      filter === value
+                        ? "border-cyan-300/30 bg-cyan-300/15 text-cyan-100"
+                        : "border-white/10 bg-white/[0.03] text-slate-300 hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    {value === "all" ? `All (${tasks.length})` : value === "open" ? `Open (${openTasks})` : `Done (${doneTasks})`}
+                  </button>
+                ))}
+              </div>
+            </SectionCard>
+
+            <div className="space-y-4">
+              {filteredGroups.map((group) => (
+                <SectionCard key={group.label}>
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="text-lg font-semibold text-white">{group.label}</h3>
+                      <StatusBadge status={group.status} />
+                      <PriorityBadge priority={group.priority} />
+                    </div>
+                    <div className="text-sm text-slate-400">{group.tasks.length} visible tasks</div>
                   </div>
-                  <div className="text-right">
-                    <div className="text-xs text-gray-400">Sessions: {a.sessions}</div>
-                    <code className="text-xs text-purple-400">{a.model}</code>
+                  <div className="mt-4 space-y-2">
+                    {group.tasks.map((task) => (
+                      <label
+                        key={task.id}
+                        className={`flex items-start gap-3 rounded-2xl border border-white/8 bg-white/[0.03] p-3 transition hover:bg-white/[0.06] ${
+                          task.done ? "opacity-55" : ""
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={task.done}
+                          onChange={() => toggleTask(task.id)}
+                          className="mt-1 h-4 w-4 cursor-pointer accent-cyan-400"
+                        />
+                        <span className={`text-sm leading-6 ${task.done ? "text-slate-500 line-through" : "text-slate-200"}`}>
+                          {task.text}
+                        </span>
+                      </label>
+                    ))}
                   </div>
-                </div>
+                </SectionCard>
               ))}
             </div>
-
-            <div className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-5">
-              <h2 className="text-lg font-bold text-teal-400 mb-4">🔧 Installed Skills ({skills.length})</h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                {skills.map(s => (
-                  <div key={s.name} className="flex items-start gap-3 py-2.5 px-3 bg-white/[0.02] rounded-lg">
-                    <span className="text-xs text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded mt-0.5">{s.location}</span>
-                    <div>
-                      <span className="text-sm text-white font-medium">{s.name}</span>
-                      <div className="text-xs text-gray-500">{s.desc}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
           </div>
         )}
 
-        {/* MEMORY TAB */}
+        {tab === "models" && (
+          <div className="space-y-6">
+            <div className="grid gap-6 xl:grid-cols-[1.25fr_0.75fr]">
+              <SectionCard>
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h2 className="text-xl font-semibold text-white">Model inventory</h2>
+                    <p className="mt-1 text-sm text-slate-400">Current providers, context windows, and cost posture from the repo snapshot.</p>
+                  </div>
+                  <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-slate-300">
+                    {models.length} configured
+                  </div>
+                </div>
+                <div className="mt-5 overflow-x-auto">
+                  <table className="min-w-full text-sm">
+                    <thead>
+                      <tr className="text-left text-[11px] uppercase tracking-[0.18em] text-slate-500">
+                        <th className="pb-3 pr-4">Provider</th>
+                        <th className="pb-3 pr-4">Model</th>
+                        <th className="pb-3 pr-4">Context</th>
+                        <th className="pb-3 pr-4">Input</th>
+                        <th className="pb-3 pr-4">Output</th>
+                        <th className="pb-3">Role</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {models.map((model) => (
+                        <tr key={model.model} className="border-t border-white/8 align-top">
+                          <td className="py-3 pr-4 text-slate-200">{model.provider}</td>
+                          <td className="py-3 pr-4">
+                            <code className="rounded-lg bg-cyan-400/10 px-2 py-1 text-xs text-cyan-200">{model.model}</code>
+                          </td>
+                          <td className="py-3 pr-4 text-slate-300">{model.ctx}</td>
+                          <td className="py-3 pr-4 font-mono text-xs text-emerald-200">{model.costIn}</td>
+                          <td className="py-3 pr-4 font-mono text-xs text-rose-200">{model.costOut}</td>
+                          <td className="py-3 text-slate-300">{model.label}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </SectionCard>
+
+              <SectionCard>
+                <h2 className="text-xl font-semibold text-white">Spend context</h2>
+                <div className="mt-4 rounded-2xl border border-emerald-400/15 bg-emerald-400/8 p-4">
+                  <div className="text-[11px] uppercase tracking-[0.18em] text-emerald-100/70">{costEstimates.today.label}</div>
+                  <div className="mt-2 text-3xl font-semibold text-emerald-200">{costEstimates.today.estimatedCost}</div>
+                  <div className="mt-1 text-sm text-emerald-50/80">
+                    {costEstimates.today.estimatedTokens} across {costEstimates.today.sessions} sessions
+                  </div>
+                </div>
+                <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.03] p-4 text-sm text-slate-300">
+                  {costEstimates.today.note}
+                </div>
+                <div className="mt-4 space-y-2">
+                  {costEstimates.rates.map((rate) => (
+                    <div key={rate.model} className="flex items-center justify-between gap-3 rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3">
+                      <div>
+                        <div className="text-sm text-white">{rate.model}</div>
+                        <div className="text-xs text-slate-500">{rate.tier} cost tier</div>
+                      </div>
+                      <div className="text-right text-xs">
+                        <div className="text-emerald-200">In: {rate.input}</div>
+                        <div className="text-rose-200">Out: {rate.output}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </SectionCard>
+            </div>
+
+            <SectionCard>
+              <h2 className="text-xl font-semibold text-white">Active sessions</h2>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                {sessions.map((session) => (
+                  <div key={session.key} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                    <div className="text-sm font-medium text-white">{session.key}</div>
+                    <div className="mt-1 text-sm text-slate-400">
+                      {session.kind} · {session.status}
+                    </div>
+                    <code className="mt-3 inline-flex rounded-lg bg-cyan-400/10 px-2 py-1 text-xs text-cyan-200">{session.model}</code>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          </div>
+        )}
+
+        {tab === "agents" && (
+          <div className="space-y-6">
+            <SectionCard>
+              <h2 className="text-xl font-semibold text-white">Agents</h2>
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                {agents.map((agent) => (
+                  <div key={agent.name} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="text-lg font-semibold text-white">{agent.name}</span>
+                        <StatusBadge status={agent.status === "active" ? "active" : "stalled"} />
+                      </div>
+                      <div className="text-sm text-slate-400">{agent.sessions} sessions</div>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-300">{agent.desc}</p>
+                    <code className="mt-3 inline-flex rounded-lg bg-cyan-400/10 px-2 py-1 text-xs text-cyan-200">{agent.model}</code>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+
+            <SectionCard>
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-xl font-semibold text-white">Installed skills</h2>
+                <div className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-slate-300">
+                  {skills.length} total
+                </div>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {skills.map((skill) => (
+                  <div key={skill.name} className="rounded-2xl border border-white/8 bg-white/[0.03] p-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-sm font-semibold text-white">{skill.name}</span>
+                      <span className="rounded-full border border-white/10 bg-slate-900 px-2 py-0.5 text-[11px] uppercase tracking-[0.18em] text-slate-400">
+                        {skill.location}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-sm text-slate-400">{skill.desc}</p>
+                  </div>
+                ))}
+              </div>
+            </SectionCard>
+          </div>
+        )}
+
         {tab === "memory" && (
           <div className="space-y-4">
-            {memoryHighlights.map(m => (
-              <div key={m.project} className="bg-[#0f0f1e] border border-gray-800/50 rounded-xl p-5">
-                <h3 className="text-sm font-bold text-white mb-3">{m.project}</h3>
-                <ul className="space-y-2">
-                  {m.highlights.map((h, i) => (
-                    <li key={i} className="text-sm text-gray-400 pl-4 border-l-2 border-purple-500/40 leading-relaxed">{h}</li>
+            {memoryHighlights.map((memory) => (
+              <SectionCard key={memory.project}>
+                <h2 className="text-xl font-semibold text-white">{memory.project}</h2>
+                <ul className="mt-4 space-y-3">
+                  {memory.highlights.map((highlight, index) => (
+                    <li key={index} className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-3 text-sm leading-6 text-slate-300">
+                      {highlight}
+                    </li>
                   ))}
                 </ul>
-              </div>
+              </SectionCard>
             ))}
           </div>
         )}
